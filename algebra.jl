@@ -1,23 +1,35 @@
+# Below is a toy example of a DSL that performs simple symbolic manipulation 
+# on basic polynomials and trig functions.
+# It was a fun experiment to play around with Julia's type system 
+# There is a weird behaviour where certain expressions yield an unholy number of allocations
+# whilst others yield very little. Might investigate in the future. 
+
 abstract type AbstractExpression end 
 
+abstract type AbstractConstant <: AbstractExpression end
+
 # A constant can either be a single letter variable or a floating point number
-struct Constant{T <: Union{String,Float32}} <: AbstractExpression
+struct Constant{T <: Union{Char,Float32}} <: AbstractConstant
     val::T 
 
-    Constant(x::Symbol) = new{String}(string(x))
+    Constant(x::Symbol) = new{Char}(string(x)[1])
     Constant(x::Real) = new{Float32}(x)
 end
 
-con = Constant
+struct ZeroConstant <: AbstractConstant end 
+Base.show(io::IO, z::ZeroConstant) = print(io, 0)
+
+con(x::Real)::AbstractConstant = x == 0 ? ZeroConstant() : Constant(x)
+con(x::Symbol) = Constant(x)
 
 Base.show(io::IO, k::Constant) = print(io, k.val)
 
-deriv(k::Constant) = con(0) # The derivative of any constant is just the constant 0
+deriv(k::Constant)::ZeroConstant = ZeroConstant() # The derivative of any constant is just the constant 0
 
 struct Variable <: AbstractExpression
-    var::String 
+    var::Char 
 
-    Variable(sym::Symbol) = new(string(sym))
+    Variable(x::Symbol) = new(string(x)[1])
 end
 
 var = Variable
@@ -59,22 +71,22 @@ end
 @binary_operator(Divide, /)
 @binary_operator(Power, ^)
 
-Base.:^(left::Symbol, right::Real) = Power(Variable(left), con(right)) # Matches :x^2
-Base.:^(left::Constant{T}, right::Real) where T = Power(left, con(right)) # Matches con(2)^3 and con(:x)^3
+Base.:^(left::AbstractExpression, right::ZeroConstant)::AbstractExpression = con(1) 
+Base.:^(left::Symbol, right::Real) = Variable(left)^con(right) # Matches :x^2
+Base.:^(left::Constant{T}, right::Real) where T = left^con(right) # Matches con(2)^3 and con(:x)^3
 
 # Pruning for any operator that encounters a 0
-Base.:*(left::Constant{Float32}, right::AbstractExpression) = left.val == 0 ? con(0) : Multiply(left, right)
-Base.:*(left::AbstractExpression, right::Constant{Float32}) = right.val == 0 ? con(0) : Multiply(left, right)
-Base.:/(left::Constant{Float32}, right::AbstractExpression) = left.val == 0 ? con(0) : Divide(left, right)
-Base.:+(left::Constant{Float32}, right::AbstractExpression) = left.val == 0 ? right : Add(left, right)
-Base.:+(left::AbstractExpression, right::Constant{Float32}) = right.val == 0 ? left : Add(left, right)
-Base.:-(left::AbstractExpression, right::Constant{Float32}) = right.val == 0 ? left : Subtract(left, right)
-Base.:^(left::AbstractExpression, right::Constant{Float32}) = right.val == 0 ? con(1) : Power(left, right)
+Base.:*(left::ZeroConstant, right::AbstractExpression)::AbstractExpression = ZeroConstant()
+Base.:*(left::AbstractExpression, right::ZeroConstant)::AbstractExpression = ZeroConstant()
+Base.:/(left::ZeroConstant, right::AbstractExpression)::AbstractExpression = ZeroConstant()
+Base.:+(left::ZeroConstant, right::AbstractExpression)::AbstractExpression = right
+Base.:+(left::AbstractExpression, right::ZeroConstant)::AbstractExpression = left 
+Base.:-(left::AbstractExpression, right::ZeroConstant)::AbstractExpression = left 
 
-function Base.show(io::IO, t::Power{T,Constant{Float32}}) where T <: Union{Variable,Constant{String}}
+function Base.show(io::IO, t::Power{T,Constant{Float32}}) where T <: Union{Variable,Constant{Char}}
     print(io, t.left)
     if t.right.val != 1.0 
-        print(io, "^", t.right)
+        print(io, sym(t), t.right)
     end
 end
 Base.show(io::IO, t::AbstractBinaryOperator) = print(io, "(", t.left, sym(t), t.right, ")")
@@ -84,7 +96,7 @@ deriv(x::Subtract) = deriv(x.left) - deriv(x.right)
 deriv(x::Multiply) = deriv(x.left) * x.right + x.left * deriv(x.right)
 deriv(x::Divide) = (deriv(x.left) * x.right - x.left * deriv(x.right)) / (x.right * x.right) 
 
-deriv(x::Power{Constant{K},T}) where {K,T} = con(0)
+deriv(x::Power{AbstractConstant,T}) where {K,T} = con(0)
 deriv(x::Power{Variable,Constant{T}}) where T = x.right * x.left^(x.right - con(1))
 
 
@@ -118,6 +130,4 @@ const big_polynomial = :x^8 + con(:a) * Sin(:x^2 + Cos(:x^3)) + :x^2 / (:x^4 + c
 
 println("Derivative of ", general_quadratic, " is ", deriv(general_quadratic))
 println("Derivative of ", generic_trig, " is ", deriv(generic_trig))
-
-@time deriv(:x^2)
-@time deriv(:x^2 + :x^4)
+println("Derviative of ", big_polynomial, " is ", deriv(big_polynomial))
